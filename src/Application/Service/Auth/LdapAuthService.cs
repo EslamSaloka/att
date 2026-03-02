@@ -1,8 +1,7 @@
-using System.DirectoryServices;
-using System.DirectoryServices.AccountManagement;
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using System.DirectoryServices;
+using System.DirectoryServices.AccountManagement;
 
 namespace Application.Service.Auth;
 
@@ -24,8 +23,7 @@ public class LdapAuthService : ILdapAuthService
     }
 
     /// <summary>
-    /// Authenticates a user against LDAP/Active Directory using PrincipalContext.ValidateCredentials
-    /// (same approach as VMS production login).
+    /// Authenticates a user against LDAP/Active Directory.
     /// </summary>
     public async Task<bool> AuthenticateAsync(string email, string password)
     {
@@ -34,27 +32,24 @@ public class LdapAuthService : ILdapAuthService
             if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
                 return false;
 
-            var ldapPath = _configuration["Ldap:Path"];
             var domain = _configuration["Ldap:Domain"];
 
-            if (string.IsNullOrWhiteSpace(ldapPath) || string.IsNullOrWhiteSpace(domain))
+            if (string.IsNullOrWhiteSpace(domain))
             {
-                _logger.LogWarning("LDAP configuration is missing (Path or Domain)");
+                _logger.LogWarning("LDAP configuration is missing (Domain)");
                 return false;
             }
 
             // Extract username from email (assuming email format: username@domain)
             var username = email.Split('@')[0];
-
-            // Sanitize username to prevent LDAP injection
             username = SanitizeLdapInput(username);
 
             return await Task.Run(() =>
             {
                 try
                 {
-                    // Step 1: Verify user exists in LDAP directory first (like VMS)
-                    using var entry = new DirectoryEntry(ldapPath);
+                    // Step 1: Verify user exists in LDAP directory 
+                    using var entry = new DirectoryEntry(string.Format("LDAP://{0}", domain));
                     using var searcher = new DirectorySearcher(entry);
                     searcher.Filter = $"(SAMAccountName={username})";
                     searcher.PropertiesToLoad.Add("cn");
@@ -68,7 +63,7 @@ public class LdapAuthService : ILdapAuthService
                         return false;
                     }
 
-                    // Step 2: Validate credentials using PrincipalContext (same as VMS production)
+                    // Step 2: Validate credentials using PrincipalContext 
                     using var context = new PrincipalContext(ContextType.Domain);
                     var isValid = context.ValidateCredentials(username, password);
 
@@ -108,23 +103,24 @@ public class LdapAuthService : ILdapAuthService
     }
 
     /// <summary>
-    /// Retrieves user details from LDAP/Active Directory including mobile number (for MFA).
-    /// Retrieves: givenName, sn, department, employeeID, mobile, mail, cn
+    /// Retrieves user details from LDAP/Active Directory including mobile number.
+    /// binds anonymously (works on most AD setups for read-only searches).
     /// </summary>
     public async Task<(string FirstName, string LastName, string Department, string PersonNumber, string MobileNumber)> GetUserDetailsAsync(string email)
     {
         try
         {
-            var ldapPath = _configuration["Ldap:Path"];
+            var domain = _configuration["Ldap:Domain"];
             var adminUsername = _configuration["Ldap:AdminUsername"];
             var adminPassword = _configuration["Ldap:AdminPassword"];
 
-            if (string.IsNullOrWhiteSpace(ldapPath))
+            if (string.IsNullOrWhiteSpace(domain))
             {
-                _logger.LogWarning("LDAP Path configuration is missing");
+                _logger.LogWarning("LDAP Domain configuration is missing");
                 return ("", "", "", "", "");
             }
 
+            var ldapPath = string.Format("LDAP://{0}", domain);
             var username = email.Split('@')[0];
             username = SanitizeLdapInput(username);
 
@@ -153,7 +149,7 @@ public class LdapAuthService : ILdapAuthService
                         var personNumber = GetLdapProperty(result, "employeeID");
                         var mobileRaw = GetLdapProperty(result, "mobile");
 
-                        // Extract last 9 digits of mobile number (same as VMS)
+                        // Extract last 9 digits of mobile number
                         var mobileNumber = !string.IsNullOrEmpty(mobileRaw) && mobileRaw.Length >= 9
                             ? mobileRaw.Substring(mobileRaw.Length - 9)
                             : mobileRaw;
@@ -181,9 +177,6 @@ public class LdapAuthService : ILdapAuthService
         }
     }
 
-    /// <summary>
-    /// Safely retrieves a property value from an LDAP search result.
-    /// </summary>
     private static string GetLdapProperty(SearchResult result, string propertyName)
     {
         try
@@ -196,7 +189,7 @@ public class LdapAuthService : ILdapAuthService
         }
         catch (Exception)
         {
-            // Silently continue - property not available
+            // Property not available
         }
 
         return string.Empty;
@@ -204,21 +197,17 @@ public class LdapAuthService : ILdapAuthService
 
     /// <summary>
     /// Sanitizes input to prevent LDAP injection attacks.
-    /// Escapes special LDAP filter characters.
     /// </summary>
     private static string SanitizeLdapInput(string input)
     {
         if (string.IsNullOrEmpty(input))
             return input;
 
-        // Escape LDAP special characters per RFC 4515
-        var sanitized = input
+        return input
             .Replace("\\", "\\5c")
             .Replace("*", "\\2a")
             .Replace("(", "\\28")
             .Replace(")", "\\29")
             .Replace("\0", "\\00");
-
-        return sanitized;
     }
 }

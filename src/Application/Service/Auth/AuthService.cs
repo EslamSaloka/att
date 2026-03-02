@@ -1,14 +1,14 @@
 using Application.DTOs.Auth;
 using Domain.Entities;
 using Domain.Repositories.Users;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.IdentityModel.Tokens;
+using Shared.Common;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
-using Microsoft.Extensions.Hosting;
-using Microsoft.IdentityModel.Tokens;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Shared.Common;
 
 namespace Application.Service.Auth;
 
@@ -55,7 +55,7 @@ public class AuthService : IAuthService
             // Check for existing user in database
             var existingUser = await _userRepository.GetByEmailAsync(request.Email);
 
-            // VMS Logic: If user exists in DB, check if they are active before proceeding
+            //  If user exists in DB, check if they are active before proceeding
             if (existingUser != null && !existingUser.IsActive)
             {
                 _logger.LogWarning("Login attempt by inactive user {Email}", request.Email);
@@ -118,7 +118,7 @@ public class AuthService : IAuthService
             }
             else
             {
-                // Update LDAP details for existing user (sync on each login like VMS)
+                // Update LDAP details for existing user 
                 var (firstName, lastName, department, personNumber, mobileNumber) =
                     await _ldapAuthService.GetUserDetailsAsync(request.Email);
 
