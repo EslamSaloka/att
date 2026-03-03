@@ -1,0 +1,36 @@
+# Build output
+**/bin/
+**/obj/
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build cache
+*.cache
+
+# Compressed files
+*.gz
+*.compressed
+
+# NuGet
+**/packages/
+
+# dotnet tools
+.dotnet/
+
+# Ignore Rider project files
+.idea/
+
+# Visual Studio Code settings
+.vscode/
+
+# Test results
+TestResults/
+
+# Remove any global ignores for *.dll, *.pdb, *.json (do NOT add these here)
+# If you need to keep appsettings.json, ensure it's not ignored
+# !appsettings.json
