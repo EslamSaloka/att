@@ -68,12 +68,12 @@ public class AuthController : ControllerBase
             // Get user ID from claims
             var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
             
-            if (string.IsNullOrEmpty(userIdClaim) || !int.TryParse(userIdClaim, out var userId))
+            if (string.IsNullOrEmpty(userIdClaim))
             {
                 return Unauthorized();
             }
 
-            await _authService.LogoutAsync(userId);
+            await _authService.LogoutAsync(userIdClaim);
             return Ok(new { message = "Logged out successfully" });
         }
         catch (Exception ex)

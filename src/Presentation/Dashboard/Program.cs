@@ -1,21 +1,12 @@
 using Dashboard.Components;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 
-#region Domain Layer
-using Domain.Repositories;
-using Domain.Repositories.Users;
-#endregion
 #region Application Layer
 using Application;
 using Application.Service.Auth;
 using Application.Service.Nifi;
-#endregion
-#region Infrastructure Layer
-using Infrastructure.Persistence.Repositories;
-using Infrastructure.Persistence;
 #endregion
 
 var builder = WebApplication.CreateBuilder(args);
@@ -30,17 +21,9 @@ builder.Services
 builder.Services.AddControllers();
 builder.Services.AddHttpClient();
 
-
-#region DbContext
-builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
-#endregion
-
-builder.Services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
-
 #region AddScoped
 
 #region Authentication & Authorization
-builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<ILdapAuthService, LdapAuthService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 #endregion
@@ -89,30 +72,6 @@ builder.Services.AddAutoMapper(typeof(MappingProfile).Assembly);
 #endregion
 
 var app = builder.Build();
-
-// Development only: auto-migrate and seed database
-if (app.Environment.IsDevelopment())
-{
-    using (var scope = app.Services.CreateScope())
-    {
-        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-        try
-        {
-            logger.LogInformation("Applying pending database migrations (Development)...");
-            await dbContext.Database.MigrateAsync();
-            logger.LogInformation("Database migrations applied successfully.");
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "An error occurred while applying database migrations.");
-            throw;
-        }
-    }
-
-    await Infrastructure.Persistence.DatabaseSeeder.SeedDevelopmentDataAsync(app.Services, app.Environment.EnvironmentName);
-}
-
 
 // Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())

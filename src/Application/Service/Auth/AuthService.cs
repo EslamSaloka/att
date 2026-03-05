@@ -1,8 +1,5 @@
 using Application.DTOs.Auth;
-using Domain.Entities;
-using Domain.Repositories.Users;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 using Shared.Common;
@@ -15,29 +12,23 @@ namespace Application.Service.Auth;
 public interface IAuthService
 {
     Task<Result<LoginResponseDto>> LoginAsync(LoginRequestDto request);
-    Task<bool> LogoutAsync(int userId);
+    Task<bool> LogoutAsync(string userId);
 }
 
 public class AuthService : IAuthService
 {
     private readonly ILdapAuthService _ldapAuthService;
-    private readonly IUserRepository _userRepository;
     private readonly IConfiguration _configuration;
     private readonly ILogger<AuthService> _logger;
-    private readonly IHostEnvironment _environment;
 
     public AuthService(
         ILdapAuthService ldapAuthService,
-        IUserRepository userRepository,
         IConfiguration configuration,
-        ILogger<AuthService> logger,
-        IHostEnvironment environment)
+        ILogger<AuthService> logger)
     {
         _ldapAuthService = ldapAuthService;
-        _userRepository = userRepository;
         _configuration = configuration;
         _logger = logger;
-        _environment = environment;
     }
 
     public async Task<Result<LoginResponseDto>> LoginAsync(LoginRequestDto request)
@@ -52,96 +43,51 @@ public class AuthService : IAuthService
             if (!IsValidEmail(request.Email))
                 return Result<LoginResponseDto>.Failure("Invalid email format");
 
-            // Check for existing user in database
-            var existingUser = await _userRepository.GetByEmailAsync(request.Email);
-
-            //  If user exists in DB, check if they are active before proceeding
-            if (existingUser != null && !existingUser.IsActive)
-            {
-                _logger.LogWarning("Login attempt by inactive user {Email}", request.Email);
-                return Result<LoginResponseDto>.Failure("اسم المستخدم غير موجود أو غير نشط"); // User not found or inactive
-            }
-
-            bool isAuthenticated = false;
-            bool isDevelopment = _environment.IsDevelopment();
-
-            if (isDevelopment)
-            {
-                // Development ONLY: Allow local password hash fallback (skip LDAP)
-                if (existingUser != null && !string.IsNullOrEmpty(existingUser.PasswordHash))
-                {
-                    isAuthenticated = VerifyPassword(request.Password, existingUser.PasswordHash);
-                    _logger.LogInformation("User {Email} authenticated via local password hash (Development mode)", request.Email);
-                }
-                else
-                {
-                    // Even in dev, try LDAP if no local hash exists
-                    isAuthenticated = await _ldapAuthService.AuthenticateAsync(request.Email, request.Password);
-                }
-            }
-            else
-            {
-                // UAT & Production: ALWAYS enforce LDAP authentication — no password hash fallback
-                isAuthenticated = await _ldapAuthService.AuthenticateAsync(request.Email, request.Password);
-                _logger.LogInformation("LDAP authentication enforced for {Email} in {Environment} environment",
-                    request.Email, _environment.EnvironmentName);
-            }
+            // LDAP-only authentication for all environments.
+            var isAuthenticated = await _ldapAuthService.AuthenticateAsync(request.Email, request.Password);
 
             if (!isAuthenticated)
                 return Result<LoginResponseDto>.Failure("اسم المستخدم / كلمة المرور غير صحيحة"); // Invalid username or password
 
-            // Get or create user
-            var user = existingUser;
+            // Read user profile and active flag from LDAP only.
+            var (firstName, lastName, department, personNumber, mobileNumber, isActive) =
+                await _ldapAuthService.GetUserDetailsAsync(request.Email);
 
-            if (user == null)
+            if (!isActive)
             {
-                // Get user details from LDAP (including mobile number for MFA)
-                var (firstName, lastName, department, personNumber, mobileNumber) =
-                    await _ldapAuthService.GetUserDetailsAsync(request.Email);
-
-                user = new User
-                {
-                    Email = request.Email,
-                    FirstName = firstName ?? request.Email.Split('@')[0],
-                    LastName = lastName ?? "",
-                    Department = department ?? "",
-                    PersonNumber = personNumber ?? "",
-                    MobileNumber = mobileNumber ?? "",
-                    IsActive = true,
-                    CreatedAt = DateTime.UtcNow,
-                    Role = "User"
-                };
-
-                user = await _userRepository.AddAsync(user);
-                await _userRepository.SaveChangesAsync();
-                _logger.LogInformation("New user {Email} created from LDAP details", request.Email);
-            }
-            else
-            {
-                // Update LDAP details for existing user 
-                var (firstName, lastName, department, personNumber, mobileNumber) =
-                    await _ldapAuthService.GetUserDetailsAsync(request.Email);
-
-                if (!string.IsNullOrEmpty(firstName)) user.FirstName = firstName;
-                if (!string.IsNullOrEmpty(lastName)) user.LastName = lastName;
-                if (!string.IsNullOrEmpty(department)) user.Department = department;
-                if (!string.IsNullOrEmpty(personNumber)) user.PersonNumber = personNumber;
-                if (!string.IsNullOrEmpty(mobileNumber)) user.MobileNumber = mobileNumber;
+                _logger.LogWarning("Login attempt by inactive LDAP user {Email}", request.Email);
+                return Result<LoginResponseDto>.Failure("اسم المستخدم غير موجود أو غير نشط");
             }
 
-            // Update last login
-            await _userRepository.UpdateLastLoginAsync(user.Id);
-            await _userRepository.SaveChangesAsync();
+            var usernameFromEmail = request.Email.Split('@')[0];
+            var safePersonNumber = !string.IsNullOrWhiteSpace(personNumber)
+                ? personNumber
+                : usernameFromEmail;
+
+            var fullName = $"{firstName} {lastName}".Trim();
+            if (string.IsNullOrWhiteSpace(fullName))
+            {
+                fullName = usernameFromEmail;
+            }
+            var role = "User";
 
             // Generate JWT token
-            var token = GenerateJwtToken(user);
+            var token = GenerateJwtToken(
+                userId: safePersonNumber,
+                email: request.Email,
+                fullName: fullName,
+                role: role,
+                department: department,
+                personNumber: safePersonNumber,
+                mobileNumber: mobileNumber);
+
             var response = new LoginResponseDto
             {
-                UserId = user.Id,
-                Email = user.Email,
-                FullName = user.FullName,
-                PersonNumber = user.PersonNumber,
-                Role = user.Role,
+                UserId = safePersonNumber,
+                Email = request.Email,
+                FullName = fullName,
+                PersonNumber = safePersonNumber,
+                Role = role,
                 Token = token,
                 ExpiresAt = DateTime.UtcNow.AddHours(24)
             };
@@ -156,7 +102,7 @@ public class AuthService : IAuthService
         }
     }
 
-    public async Task<bool> LogoutAsync(int userId)
+    public async Task<bool> LogoutAsync(string userId)
     {
         try
         {
@@ -170,7 +116,14 @@ public class AuthService : IAuthService
         }
     }
 
-    private string GenerateJwtToken(User user)
+    private string GenerateJwtToken(
+        string userId,
+        string email,
+        string fullName,
+        string role,
+        string? department,
+        string? personNumber,
+        string? mobileNumber)
     {
         var jwtSettings = _configuration.GetSection("Jwt");
         var secretKey = jwtSettings["SecretKey"];
@@ -185,13 +138,13 @@ public class AuthService : IAuthService
 
         var claims = new List<Claim>
         {
-            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-            new Claim(ClaimTypes.Email, user.Email),
-            new Claim(ClaimTypes.Name, user.FullName),
-            new Claim(ClaimTypes.Role, user.Role),
-            new Claim("Department", user.Department ?? ""),
-            new Claim("PersonNumber", user.PersonNumber ?? ""),
-            new Claim(ClaimTypes.MobilePhone, user.MobileNumber ?? "")
+            new Claim(ClaimTypes.NameIdentifier, userId),
+            new Claim(ClaimTypes.Email, email),
+            new Claim(ClaimTypes.Name, fullName),
+            new Claim(ClaimTypes.Role, role),
+            new Claim("Department", department ?? ""),
+            new Claim("PersonNumber", personNumber ?? ""),
+            new Claim(ClaimTypes.MobilePhone, mobileNumber ?? "")
         };
 
         var token = new JwtSecurityToken(
@@ -216,21 +169,5 @@ public class AuthService : IAuthService
         {
             return false;
         }
-    }
-
-    private static bool VerifyPassword(string password, string passwordHash)
-    {
-        // Simple hash comparison for development mode
-        // In production, use BCrypt or similar
-        return HashPassword(password) == passwordHash;
-    }
-
-    public static string HashPassword(string password)
-    {
-        // Simple hash for development - use BCrypt in production
-        using var sha256 = System.Security.Cryptography.SHA256.Create();
-        var bytes = Encoding.UTF8.GetBytes(password);
-        var hash = sha256.ComputeHash(bytes);
-        return Convert.ToBase64String(hash);
     }
 }

@@ -8,7 +8,7 @@ namespace Application.Service.Auth;
 public interface ILdapAuthService
 {
     Task<bool> AuthenticateAsync(string email, string password);
-    Task<(string FirstName, string LastName, string Department, string PersonNumber, string MobileNumber)> GetUserDetailsAsync(string email);
+    Task<(string FirstName, string LastName, string Department, string PersonNumber, string MobileNumber, bool IsActive)> GetUserDetailsAsync(string email);
 }
 
 public class LdapAuthService : ILdapAuthService
@@ -63,6 +63,12 @@ public class LdapAuthService : ILdapAuthService
                         return false;
                     }
 
+                    if (!IsLdapUserActive(searchResult))
+                    {
+                        _logger.LogWarning("LDAP authentication failed for user {Email}: User is disabled/inactive", email);
+                        return false;
+                    }
+
                     // Step 2: Validate credentials using PrincipalContext 
                     using var context = new PrincipalContext(ContextType.Domain);
                     var isValid = context.ValidateCredentials(username, password);
@@ -106,7 +112,7 @@ public class LdapAuthService : ILdapAuthService
     /// Retrieves user details from LDAP/Active Directory including mobile number.
     /// binds anonymously (works on most AD setups for read-only searches).
     /// </summary>
-    public async Task<(string FirstName, string LastName, string Department, string PersonNumber, string MobileNumber)> GetUserDetailsAsync(string email)
+    public async Task<(string FirstName, string LastName, string Department, string PersonNumber, string MobileNumber, bool IsActive)> GetUserDetailsAsync(string email)
     {
         try
         {
@@ -117,7 +123,7 @@ public class LdapAuthService : ILdapAuthService
             if (string.IsNullOrWhiteSpace(domain))
             {
                 _logger.LogWarning("LDAP Domain configuration is missing");
-                return ("", "", "", "", "");
+                return ("", "", "", "", "", false);
             }
 
             var ldapPath = string.Format("LDAP://{0}", domain);
@@ -137,7 +143,7 @@ public class LdapAuthService : ILdapAuthService
                     searcher.PropertiesToLoad.AddRange(new[]
                     {
                         "givenName", "sn", "department", "mail",
-                        "employeeID", "mobile", "cn"
+                        "employeeID", "mobile", "cn", "userAccountControl"
                     });
 
                     var result = searcher.FindOne();
@@ -148,6 +154,7 @@ public class LdapAuthService : ILdapAuthService
                         var department = GetLdapProperty(result, "department");
                         var personNumber = GetLdapProperty(result, "employeeID");
                         var mobileRaw = GetLdapProperty(result, "mobile");
+                        var isActive = IsLdapUserActive(result);
 
                         // Extract last 9 digits of mobile number
                         var mobileNumber = !string.IsNullOrEmpty(mobileRaw) && mobileRaw.Length >= 9
@@ -157,7 +164,7 @@ public class LdapAuthService : ILdapAuthService
                         _logger.LogInformation("Retrieved LDAP details for user {Email}: Name={FirstName} {LastName}, Dept={Department}",
                             email, firstName, lastName, department);
 
-                        return (firstName, lastName, department, personNumber, mobileNumber);
+                        return (firstName, lastName, department, personNumber, mobileNumber, isActive);
                     }
 
                     _logger.LogWarning("No LDAP entry found for user {Email}", email);
@@ -167,14 +174,29 @@ public class LdapAuthService : ILdapAuthService
                     _logger.LogError(ex, "Error retrieving user details from LDAP for {Email}: {Message}", email, ex.Message);
                 }
 
-                return ("", "", "", "", "");
+                return ("", "", "", "", "", false);
             });
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error in GetUserDetailsAsync for {Email}", email);
-            return ("", "", "", "", "");
+            return ("", "", "", "", "", false);
         }
+    }
+
+    private static bool IsLdapUserActive(SearchResult result)
+    {
+        // AD disabled bit: 0x0002 in userAccountControl.
+        var userAccountControl = GetLdapProperty(result, "userAccountControl");
+
+        if (int.TryParse(userAccountControl, out var uacValue))
+        {
+            var isDisabled = (uacValue & 0x0002) != 0;
+            return !isDisabled;
+        }
+
+        // If flag is missing, assume active to avoid false negatives.
+        return true;
     }
 
     private static string GetLdapProperty(SearchResult result, string propertyName)
