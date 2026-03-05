@@ -24,7 +24,9 @@ builder.Services.AddHttpClient();
 #region AddScoped
 
 #region Authentication & Authorization
+#pragma warning disable CA1416 // Type or member is for platform-specific API
 builder.Services.AddScoped<ILdapAuthService, LdapAuthService>();
+#pragma warning restore CA1416
 builder.Services.AddScoped<IAuthService, AuthService>();
 #endregion
 

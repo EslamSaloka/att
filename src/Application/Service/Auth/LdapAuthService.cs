@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.DirectoryServices;
 using System.DirectoryServices.AccountManagement;
+using System.Runtime.Versioning;
 
 namespace Application.Service.Auth;
 
@@ -11,6 +12,7 @@ public interface ILdapAuthService
     Task<(string FirstName, string LastName, string Department, string PersonNumber, string MobileNumber, bool IsActive)> GetUserDetailsAsync(string email);
 }
 
+[SupportedOSPlatform("windows")]
 public class LdapAuthService : ILdapAuthService
 {
     private readonly IConfiguration _configuration;
