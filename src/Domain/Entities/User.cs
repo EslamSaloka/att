@@ -11,7 +11,6 @@ public class User
     public string MobileNumber { get; set; } = string.Empty;
     public string Role { get; set; } = "User";
     public bool IsActive { get; set; } = true;
-    public string? PasswordHash { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? LastLoginAt { get; set; }
 

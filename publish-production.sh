@@ -2,6 +2,7 @@
 
 # =====================================================
 #   Attendance System - Production Publish Script
+#   LDAP-Only Authentication (No Database Required)
 # =====================================================
 # Usage: ./publish-production.sh [output-path]
 # Example: ./publish-production.sh ./Publish_Production
@@ -51,8 +52,13 @@ echo ""
 echo "Next Steps:"
 echo "1. Copy contents to Production IIS server (e.g., C:\inetpub\wwwroot\AttendanceApp)"
 echo "2. Set ASPNETCORE_ENVIRONMENT=Production environment variable"
-echo "3. Update appsettings.Production.json with production settings"
-echo "4. Run database migrations: dotnet ef database update --environment Production"
-echo "5. Configure IIS Application Pool and Website"
+echo "3. Update appsettings.Production.json with production settings:"
+echo "   - Verify LDAP Domain configuration (Domain, AdminUsername, AdminPassword if needed)"
+echo "   - Verify JWT SecretKey, Issuer, Audience"
+echo "   - Update NIFI BaseUrl for production"
+echo "4. Configure IIS Application Pool (.NET Runtime v4.0 or higher)"
+echo "5. Create Website binding pointing to published directory"
 echo "6. Start application via IIS or run Dashboard.exe"
+echo ""
+echo "Note: No database setup required. Authentication is LDAP-only."
 echo ""
